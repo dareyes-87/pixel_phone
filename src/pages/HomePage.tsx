@@ -1,76 +1,108 @@
 import { Link } from "react-router-dom";
-import Layout from "./Layout";
+import PrismaticBurst from "../components/PrismaticBurst";
+import Shuffle from "../components/Shuffle";
+import PixelCard from "../components/PixelCard";
 import { IoMdGlobe } from "react-icons/io";
 import { TbCheckupList } from "react-icons/tb";
-import { FiClock } from "react-icons/fi";
 
 export default function HomePage() {
   return (
-    <Layout>
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
-        <h1 className="text-4xl md:text-5xl font-bold text-indigo-600 mb-6">
-          Welcome to TodoMaster
-        </h1>
+    <div
+      style={{
+        position: 'relative',
+        minHeight: '100vh',
+        overflow: 'hidden',
+        isolation: 'isolate',
+      }}
+    >
+      {/* Fondo animado */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          zIndex: 0,
+          pointerEvents: 'none',
+        }}
+      >
+        <PrismaticBurst
+          animationType="rotate3d"
+          intensity={4}
+          speed={0.5}
+          distort={1.0}
+          paused={false}
+          offset={{ x: 0, y: 0 }}
+          hoverDampness={0.25}
+          rayCount={24}
+          mixBlendMode="normal"
+          colors={['#ff007a', '#4d3dff', '#ffffff']}
+        />
+      </div>
 
-        <div className="max-w-2xl mx-auto">
-          <p className="text-lg text-gray-700 mb-8">
-            Organize your life simply and efficiently. TodoMaster helps you
-            manage your daily tasks without effort to stay productive and
-            focused on what really matters.
-          </p>
-        </div>
+      {/* Contenido */}
+      <div
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          color: '#fff',
+          textAlign: 'center',
+          padding: '3rem 1rem',
+        }}
+      >
+        <div className="flex flex-col items-center gap-8">
+          <Shuffle
+            text="Pixel Phone"
+            className="pixel-title"
+            shuffleDirection="right"
+            duration={0.35}
+            animationMode="evenodd"
+            shuffleTimes={1}
+            ease="power3.out"
+            stagger={0.03}
+            threshold={0.1}
+            triggerOnce={true}
+            triggerOnHover={true}
+            respectReducedMotion={true}
+          />
 
-        <Link
-          to="/dashboard"
-          className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-8 rounded-lg transition-all duration-200 transform hover:scale-105 shadow-lg flex items-center"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-5 w-5 mr-2"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-          >
-            <path
-              fillRule="evenodd"
-              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 0l-3 3a1 1 0 001.414 1.414L9 9.414V13a1 1 0 102 0V9.414l1.293 1.293a1 1 0 001.414-1.414z"
-              clipRule="evenodd"
-            />
-          </svg>
-          See my to-do
-        </Link>
+          {/* Dos “botones” */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+            <Link
+              to="/admin"
+              className="no-underline inline-block"
+              aria-label="Entrar como administrador"
+            >
+              <PixelCard variant="blue">
+                <div className="flex flex-col items-center gap-3">
+                  <IoMdGlobe size={48} />
+                  <h2 className="text-3xl font-extrabold">Administrador</h2>
+                  <p className="text-sm text-white/80 max-w-[220px]">
+                    Crea y controla eventos, colores y efectos.
+                  </p>
+                </div>
+              </PixelCard>
+            </Link>
 
-        <div className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
-          <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100">
-            <div className="text-indigo-500 mb-4 flex justify-center">
-              <TbCheckupList className="text-[3rem]" />
-            </div>
-            <h3 className="text-xl font-semibold mb-2">Easy to use</h3>
-            <p className="text-gray-600">
-              Intuitive interface to manage your tasks.
-            </p>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100">
-            <div className="text-indigo-500 mb-4 flex justify-center">
-              <FiClock className="text-[3rem]" />
-            </div>
-            <h3 className="text-xl font-semibold mb-2">Fast and reactive</h3>
-            <p className="text-gray-600">
-              Smooth experience to allow you to work fast.
-            </p>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg shadow-md border border-gray-100">
-            <div className="text-indigo-500 mb-4 flex justify-center">
-              <IoMdGlobe className="text-[3rem]" />
-            </div>
-            <h3 className="text-xl font-semibold mb-2">Work everywhere</h3>
-            <p className="text-gray-600">
-              Access your tasks from any device, anywhere.
-            </p>
+            <Link
+              to="/join"
+              className="no-underline inline-block"
+              aria-label="Unirse como Pixel User"
+            >
+              <PixelCard variant="pink">
+                <div className="flex flex-col items-center gap-3">
+                  <TbCheckupList size={48} />
+                  <h2 className="text-3xl font-extrabold">Pixel User</h2>
+                  <p className="text-sm text-white/80 max-w-[220px]">
+                    Únete con un código QR y sé un “pixel”.
+                  </p>
+                </div>
+              </PixelCard>
+            </Link>
           </div>
         </div>
       </div>
-    </Layout>
+    </div>
   );
 }
