@@ -1,3 +1,4 @@
+// src/pages/HomePage.tsx
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import PrismaticBurst from "../components/PrismaticBurst";
@@ -5,6 +6,7 @@ import Shuffle from "../components/Shuffle";
 import PixelCard from "../components/PixelCard";
 import { IoMdGlobe } from "react-icons/io";
 import { TbCheckupList } from "react-icons/tb";
+import { supabase } from "../libs/supabaseClient";
 
 /** Modal básico accesible */
 function Modal({
@@ -19,7 +21,6 @@ function Modal({
   children: React.ReactNode;
 }) {
   useEffect(() => {
-    // Cerrar con ESC
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -28,7 +29,6 @@ function Modal({
   }, [onClose]);
 
   useEffect(() => {
-    // Bloquear scroll del body cuando esté abierto
     const prev = document.body.style.overflow;
     if (open) document.body.style.overflow = "hidden";
     return () => {
@@ -73,21 +73,60 @@ function Modal({
 export default function HomePage() {
   const [openAdmin, setOpenAdmin] = useState(false);
   const [openPixel, setOpenPixel] = useState(false);
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const handleAdminSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setErrorMsg(null);
+    setInfoMsg(null);
+    setLoading(true);
+
     const data = new FormData(e.currentTarget);
-    const email = String(data.get("email") || "");
+    const email = String(data.get("email") || "").trim();
     const password = String(data.get("password") || "");
+    const fullName = String(data.get("name") || "").trim();
 
-    // TODO: Integra tu login real (Supabase, etc.)
-    // Ejemplo (ajusta la importación según tu proyecto):
-    // const { error } = await supabase.auth.signInWithPassword({ email, password });
-    // if (error) { /* muestra error */ return; }
+    try {
+      if (mode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        setOpenAdmin(false);
+        navigate("/admin");
+      } else {
+        // Registro con metadata (nombre) y URL de retorno
+        const { data: signData, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { full_name: fullName },
+            emailRedirectTo: `${window.location.origin}/`,
+          },
+        });
+        if (error) throw error;
 
-    // De momento, navega al panel admin tras "iniciar sesión"
-    navigate("/admin");
+        if (signData.session) {
+          // Sesión creada inmediatamente (si tu proyecto no requiere confirmación)
+          setOpenAdmin(false);
+          navigate("/admin");
+        } else {
+          // Se requiere confirmar email
+          setInfoMsg(
+            "Te enviamos un correo para confirmar tu cuenta. Revisa tu bandeja de entrada."
+          );
+        }
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || "Error inesperado");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -153,10 +192,13 @@ export default function HomePage() {
 
           {/* Dos “botones” */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-            {/* ADMIN: abre modal de login */}
+            {/* ADMIN: abre modal login/registro */}
             <button
               type="button"
-              onClick={() => setOpenAdmin(true)}
+              onClick={() => {
+                setMode("login");
+                setOpenAdmin(true);
+              }}
               className="no-underline inline-block text-left focus:outline-none"
               aria-label="Entrar como administrador"
             >
@@ -192,9 +234,50 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* MODAL: Login Admin */}
-      <Modal open={openAdmin} onClose={() => setOpenAdmin(false)} title="Iniciar sesión (Administrador)">
+      {/* MODAL: Admin (Login / Registro en la misma ventana) */}
+      <Modal
+        open={openAdmin}
+        onClose={() => setOpenAdmin(false)}
+        title={mode === "login" ? "Iniciar sesión (Administrador)" : "Crear cuenta (Administrador)"}
+      >
+        {/* Tabs simples */}
+        <div className="mb-4 flex rounded-xl overflow-hidden border border-gray-200">
+          <button
+            className={`flex-1 px-4 py-2 text-sm font-semibold ${
+              mode === "login" ? "bg-indigo-600 text-white" : "bg-white"
+            }`}
+            onClick={() => setMode("login")}
+          >
+            Iniciar sesión
+          </button>
+          <button
+            className={`flex-1 px-4 py-2 text-sm font-semibold ${
+              mode === "signup" ? "bg-indigo-600 text-white" : "bg-white"
+            }`}
+            onClick={() => setMode("signup")}
+          >
+            Crear cuenta
+          </button>
+        </div>
+
         <form onSubmit={handleAdminSubmit} className="space-y-4">
+          {mode === "signup" && (
+            <div>
+              <label className="block text-sm font-medium mb-1" htmlFor="name">
+                Nombre
+              </label>
+              <input
+                id="name"
+                name="name"
+                type="text"
+                autoComplete="name"
+                required
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Tu nombre"
+              />
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium mb-1" htmlFor="email">
               Correo electrónico
@@ -209,6 +292,7 @@ export default function HomePage() {
               placeholder="admin@ejemplo.com"
             />
           </div>
+
           <div>
             <label className="block text-sm font-medium mb-1" htmlFor="password">
               Contraseña
@@ -217,25 +301,48 @@ export default function HomePage() {
               id="password"
               name="password"
               type="password"
-              autoComplete="current-password"
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
               required
               className="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="••••••••"
             />
           </div>
 
+          {errorMsg && <p className="text-sm text-red-600">{errorMsg}</p>}
+          {infoMsg && <p className="text-sm text-amber-600">{infoMsg}</p>}
+
           <button
             type="submit"
-            className="w-full rounded-xl bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            disabled={loading}
+            className="w-full rounded-xl bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            Iniciar sesión
+            {loading ? (mode === "login" ? "Ingresando…" : "Creando cuenta…") : (mode === "login" ? "Iniciar sesión" : "Registrarme")}
           </button>
 
           <p className="text-xs text-gray-500 text-center">
-            ¿No tienes cuenta?{" "}
-            <Link to="/signup" className="underline text-indigo-600 hover:text-indigo-700">
-              Crear cuenta
-            </Link>
+            {mode === "login" ? (
+              <>
+                ¿No tienes cuenta?{" "}
+                <button
+                  type="button"
+                  onClick={() => setMode("signup")}
+                  className="underline text-indigo-600 hover:text-indigo-700"
+                >
+                  Crear cuenta
+                </button>
+              </>
+            ) : (
+              <>
+                ¿Ya tienes cuenta?{" "}
+                <button
+                  type="button"
+                  onClick={() => setMode("login")}
+                  className="underline text-indigo-600 hover:text-indigo-700"
+                >
+                  Iniciar sesión
+                </button>
+              </>
+            )}
           </p>
         </form>
       </Modal>
