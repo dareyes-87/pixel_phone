@@ -4,6 +4,7 @@ import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./ProtectedRoute";
 import HomePage from "./pages/HomePage";
 import AdminPage from "./pages/AdminPage";
+import PixelUser from "./pages/PixelUser";
 
 // (Opcional) Ruta de unión/lector QR
 function JoinPage() {
@@ -35,6 +36,7 @@ export default function App() {
             }
           />
           <Route path="/join" element={<JoinPage />} />
+          <Route path="/pixel" element={<PixelUser />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>
