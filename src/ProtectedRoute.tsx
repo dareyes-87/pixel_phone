@@ -1,19 +1,26 @@
-import { useAuth } from "@/hooks/useAuth";
-import { Navigate, Outlet } from "react-router-dom";
+// src/components/ProtectedRoute.tsx
+import { Navigate } from "react-router-dom";
+import { useAuth } from "./context/AuthContext";
+import type { JSX } from "react";
 
-export const ProtectedRoute = () => {
-  const { user, isLoading } = useAuth();
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="flex flex-col items-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-600 mb-4"></div>
-          <p className="text-gray-600">Checking authentication...</p>
-        </div>
-      </div>
-    );
-  }
+export default function ProtectedRoute({ children }: { children: JSX.Element }) {
+const { user, loading } = useAuth();
 
-  return user ? <Outlet /> : <Navigate to="/login" replace />;
-};
+
+if (loading) {
+return (
+<div className="min-h-screen grid place-items-center text-center p-6">
+<p className="text-white/90">Cargando sesión…</p>
+</div>
+);
+}
+
+
+if (!user) {
+return <Navigate to="/" replace />;
+}
+
+
+return children;
+}

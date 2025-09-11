@@ -1,42 +1,50 @@
-import { createContext, useState, useEffect } from "react";
-import { supabase } from "@/supabaseClient";
+// src/context/AuthContext.tsx
+import { createContext, useContext, useEffect, useState } from "react";
+import type { Session, User } from "@supabase/supabase-js";
+import { supabase } from "../libs/supabaseClient";
 
-type AuthContextType = {
-  user: any;
-  isLoading: boolean;
-};
 
-// eslint-disable-next-line react-refresh/only-export-components
-export const AuthContext = createContext<AuthContextType>({
-  user: null,
-  isLoading: true,
+interface AuthCtx {
+user: User | null;
+session: Session | null;
+loading: boolean;
+}
+
+
+const AuthContext = createContext<AuthCtx>({ user: null, session: null, loading: true });
+
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+const [user, setUser] = useState<User | null>(null);
+const [session, setSession] = useState<Session | null>(null);
+const [loading, setLoading] = useState(true);
+
+
+useEffect(() => {
+supabase.auth.getSession().then(({ data }) => {
+setSession(data.session);
+setUser(data.session?.user ?? null);
+setLoading(false);
 });
 
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const getUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      setUser(data.user || null);
-      setIsLoading(false);
-    };
+const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+setSession(newSession);
+setUser(newSession?.user ?? null);
+setLoading(false);
+});
 
-    getUser();
 
-    const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user || null);
-    });
+return () => listener.subscription.unsubscribe();
+}, []);
 
-    return () => {
-      data.subscription.unsubscribe();
-    };
-  }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, isLoading }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
+return (
+<AuthContext.Provider value={{ user, session, loading }}>
+{children}
+</AuthContext.Provider>
+);
+}
+
+
+export const useAuth = () => useContext(AuthContext);
