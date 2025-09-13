@@ -1,12 +1,55 @@
 // src/pages/HomePage.tsx
-import { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import PrismaticBurst from "../components/PrismaticBurst";
-import Shuffle from "../components/Shuffle";
+// Lazy: estos componentes suelen animar/dibujar
+const PrismaticBurst = lazy(() => import("../components/PrismaticBurst"));
+const Shuffle = lazy(() => import("../components/Shuffle"));
+
 import PixelCard from "../components/PixelCard";
 import { IoMdGlobe } from "react-icons/io";
 import { TbCheckupList } from "react-icons/tb";
 import { supabase } from "../libs/supabaseClient";
+
+/** Heurística ligera para decidir el modo de rendimiento */
+function usePerfMode() {
+  const [mode, setMode] = useState<"full" | "reduced" | "static">("full");
+
+  useEffect(() => {
+    try {
+      const prefersReduced =
+        typeof window !== "undefined" &&
+        window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      // Estos valores no existen en todos los navegadores (están bien como heurística)
+      const deviceMemory = (navigator as any).deviceMemory ?? 8; // GB aprox
+      const cores = navigator.hardwareConcurrency ?? 8;
+      const isSmallScreen = window.innerWidth < 640;
+      const ua = navigator.userAgent || "";
+      const isIOS = /iPhone|iPad|iPod/i.test(ua);
+
+      // Reglas:
+      // - Si el usuario pide menos movimiento -> modo "static"
+      // - Si el dispositivo es muy limitado -> "static"
+      // - Si es modesto o pantalla pequeña -> "reduced"
+      // - Si es bueno -> "full"
+      let decided: "full" | "reduced" | "static" = "full";
+
+      if (prefersReduced) decided = "static";
+      else if (deviceMemory <= 2 || cores <= 2) decided = "static";
+      else if (deviceMemory <= 3 || cores <= 4 || isSmallScreen || isIOS) decided = "reduced";
+      else decided = "full";
+
+      setMode(decided);
+      // Exponer como atributo para inspección/depuración en CSS si quieres
+      document.documentElement.setAttribute("data-perf-mode", decided);
+    } catch {
+      setMode("reduced");
+    }
+  }, []);
+
+  return mode;
+}
 
 /** Modal básico accesible */
 function Modal({
@@ -14,19 +57,21 @@ function Modal({
   onClose,
   title,
   children,
+  perfMode = "full",
 }: {
   open: boolean;
   onClose: () => void;
   title?: string;
   children: React.ReactNode;
+  perfMode?: "full" | "reduced" | "static";
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
-    document.addEventListener("keydown", onKey);
+    if (open) document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, open]);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -38,6 +83,11 @@ function Modal({
 
   if (!open) return null;
 
+  const supportsBackdrop =
+    typeof CSS !== "undefined" && CSS.supports && CSS.supports("backdrop-filter: blur(4px)");
+
+  const useBlur = perfMode === "full" && supportsBackdrop;
+
   return (
     <div
       className="fixed inset-0 z-[999] flex items-center justify-center"
@@ -46,9 +96,16 @@ function Modal({
       aria-labelledby="modal-title"
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      {/* Evita backdrop-blur en reduced/static */}
       <div
-        className="relative w-[calc(100%-2rem)] max-w-md rounded-2xl bg-white text-gray-900 shadow-2xl"
+        className={
+          useBlur
+            ? "absolute inset-0 bg-black/40 backdrop-blur-sm"
+            : "absolute inset-0 bg-black/65"
+        }
+      />
+      <div
+        className="relative w-[calc(100%-2rem)] max-w-md rounded-2xl bg-white text-gray-900 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6">
@@ -71,6 +128,7 @@ function Modal({
 }
 
 export default function HomePage() {
+  const perfMode = usePerfMode();
   const [openAdmin, setOpenAdmin] = useState(false);
   const [openPixel, setOpenPixel] = useState(false);
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -92,15 +150,11 @@ export default function HomePage() {
 
     try {
       if (mode === "login") {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         setOpenAdmin(false);
         navigate("/admin");
       } else {
-        // Registro con metadata (nombre) y URL de retorno
         const { data: signData, error } = await supabase.auth.signUp({
           email,
           password,
@@ -110,13 +164,10 @@ export default function HomePage() {
           },
         });
         if (error) throw error;
-
         if (signData.session) {
-          // Sesión creada inmediatamente (si tu proyecto no requiere confirmación)
           setOpenAdmin(false);
           navigate("/admin");
         } else {
-          // Se requiere confirmar email
           setInfoMsg(
             "Te enviamos un correo para confirmar tu cuenta. Revisa tu bandeja de entrada."
           );
@@ -129,6 +180,32 @@ export default function HomePage() {
     }
   };
 
+  // Parámetros del fondo según rendimiento
+  const bgProps = useMemo(() => {
+    if (perfMode === "static") {
+      return { use: "static" as const };
+    }
+    if (perfMode === "reduced") {
+      return {
+        use: "animated" as const,
+        rayCount: 8,
+        speed: 0.18,
+        intensity: 2.2,
+        distort: 0.4,
+        colors: ["#7c3aed", "#ec4899", "#ffffff"],
+      };
+    }
+    // full
+    return {
+      use: "animated" as const,
+      rayCount: 16,
+      speed: 0.35,
+      intensity: 3.2,
+      distort: 0.8,
+      colors: ["#ff007a", "#4d3dff", "#ffffff"],
+    };
+  }, [perfMode]);
+
   return (
     <div
       style={{
@@ -138,8 +215,9 @@ export default function HomePage() {
         isolation: "isolate",
       }}
     >
-      {/* Fondo animado */}
+      {/* Fondo */}
       <div
+        aria-hidden="true"
         style={{
           position: "absolute",
           inset: 0,
@@ -147,18 +225,43 @@ export default function HomePage() {
           pointerEvents: "none",
         }}
       >
-        <PrismaticBurst
-          animationType="rotate3d"
-          intensity={4}
-          speed={0.5}
-          distort={1.0}
-          paused={false}
-          offset={{ x: 0, y: 0 }}
-          hoverDampness={0.25}
-          rayCount={24}
-          mixBlendMode="normal"
-          colors={["#ff007a", "#4d3dff", "#ffffff"]}
-        />
+        {bgProps.use === "static" ? (
+          // Gradiente estático (sin animación, muy barato)
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              background:
+                "radial-gradient(1200px 600px at 20% 10%, rgba(124,58,237,0.45), transparent 60%), radial-gradient(1200px 800px at 80% 90%, rgba(236,72,153,0.4), transparent 60%), linear-gradient(180deg, #0b0b12, #12121a)",
+            }}
+          />
+        ) : (
+          <Suspense
+            fallback={
+              <div
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  background:
+                    "linear-gradient(180deg, #0b0b12 0%, #12121a 100%)",
+                }}
+              />
+            }
+          >
+            <PrismaticBurst
+              animationType="rotate3d"
+              intensity={bgProps.intensity}
+              speed={bgProps.speed}
+              distort={bgProps.distort}
+              paused={false}
+              offset={{ x: 0, y: 0 }}
+              hoverDampness={0.2}
+              rayCount={bgProps.rayCount}
+              mixBlendMode="normal"
+              colors={bgProps.colors}
+            />
+          </Suspense>
+        )}
       </div>
 
       {/* Contenido */}
@@ -175,24 +278,33 @@ export default function HomePage() {
         }}
       >
         <div className="flex flex-col items-center gap-8">
-          <Shuffle
-            text="Pixel Phone"
-            className="pixel-title"
-            shuffleDirection="right"
-            duration={0.35}
-            animationMode="evenodd"
-            shuffleTimes={1}
-            ease="power3.out"
-            stagger={0.03}
-            threshold={0.1}
-            triggerOnce={true}
-            triggerOnHover={true}
-            respectReducedMotion={true}
-          />
+          {/* Título: desactivar animación en modos modestos */}
+          {perfMode === "full" ? (
+            <Suspense fallback={<h1 className="text-4xl font-extrabold">Pixel Phone</h1>}>
+              <Shuffle
+                text="Pixel Phone"
+                className="pixel-title"
+                shuffleDirection="right"
+                duration={0.3}
+                animationMode="evenodd"
+                shuffleTimes={1}
+                ease="power3.out"
+                stagger={0.02}
+                threshold={0.1}
+                triggerOnce={true}
+                triggerOnHover={false}
+                respectReducedMotion={true}
+              />
+            </Suspense>
+          ) : (
+            <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight">
+              Pixel Phone
+            </h1>
+          )}
 
           {/* Dos “botones” */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
-            {/* ADMIN: abre modal login/registro */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8">
+            {/* ADMIN */}
             <button
               type="button"
               onClick={() => {
@@ -204,8 +316,8 @@ export default function HomePage() {
             >
               <PixelCard variant="blue">
                 <div className="flex flex-col items-center gap-3">
-                  <IoMdGlobe size={48} />
-                  <h2 className="text-3xl font-extrabold">Administrador</h2>
+                  <IoMdGlobe size={40} />
+                  <h2 className="text-2xl sm:text-3xl font-extrabold">Administrador</h2>
                   <p className="text-sm text-white/80 max-w-[220px]">
                     Crea y controla eventos, colores y efectos.
                   </p>
@@ -213,7 +325,7 @@ export default function HomePage() {
               </PixelCard>
             </button>
 
-            {/* PIXEL USER: abre modal con botón para escanear */}
+            {/* PIXEL USER */}
             <button
               type="button"
               onClick={() => setOpenPixel(true)}
@@ -222,8 +334,8 @@ export default function HomePage() {
             >
               <PixelCard variant="pink">
                 <div className="flex flex-col items-center gap-3">
-                  <TbCheckupList size={48} />
-                  <h2 className="text-3xl font-extrabold">Pixel User</h2>
+                  <TbCheckupList size={40} />
+                  <h2 className="text-2xl sm:text-3xl font-extrabold">Pixel User</h2>
                   <p className="text-sm text-white/80 max-w-[220px]">
                     Únete con un código QR y sé un “pixel”.
                   </p>
@@ -234,11 +346,12 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* MODAL: Admin (Login / Registro en la misma ventana) */}
+      {/* MODAL: Admin */}
       <Modal
         open={openAdmin}
         onClose={() => setOpenAdmin(false)}
         title={mode === "login" ? "Iniciar sesión (Administrador)" : "Crear cuenta (Administrador)"}
+        perfMode={perfMode}
       >
         {/* Tabs simples */}
         <div className="mb-4 flex rounded-xl overflow-hidden border border-gray-200">
@@ -316,7 +429,13 @@ export default function HomePage() {
             disabled={loading}
             className="w-full rounded-xl bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            {loading ? (mode === "login" ? "Ingresando…" : "Creando cuenta…") : (mode === "login" ? "Iniciar sesión" : "Registrarme")}
+            {loading
+              ? mode === "login"
+                ? "Ingresando…"
+                : "Creando cuenta…"
+              : mode === "login"
+              ? "Iniciar sesión"
+              : "Registrarme"}
           </button>
 
           <p className="text-xs text-gray-500 text-center">
@@ -348,7 +467,7 @@ export default function HomePage() {
       </Modal>
 
       {/* MODAL: Pixel User */}
-      <Modal open={openPixel} onClose={() => setOpenPixel(false)} title="Unirse como Pixel User">
+      <Modal open={openPixel} onClose={() => setOpenPixel(false)} title="Unirse como Pixel User" perfMode={perfMode}>
         <div className="space-y-4">
           <p className="text-sm text-gray-700">
             Para unirte a un evento, el administrador te mostrará un código QR.
