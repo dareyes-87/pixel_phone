@@ -27,5 +27,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "bridge/arduino-bridge.mjs"]
 }

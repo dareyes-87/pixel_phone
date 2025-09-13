@@ -164,54 +164,102 @@ export default function AdminPage() {
   }, []);
 
   const connectSerial = useCallback(async () => {
-    try {
-      
-      if (!("serial" in navigator)) { alert("Tu navegador no soporta Web Serial"); return; }
-      // @ts-expect-error
-      const port = await navigator.serial.requestPort();
-      await port.open({ baudRate: 9600 });
-      const decoder = new TextDecoderStream();
-      port.readable.pipeTo(decoder.writable);
-      const reader = decoder.readable.getReader();
-      serialReaderRef.current = reader;
-      serialPortRef.current = port;
-      setSerialStatus("Conectado");
-
-      (async function readSerialLoop() {
-        let buffer = "";
-        try {
-          while (serialReaderRef.current) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            if (!value) continue;
-
-            buffer += value;
-            let idx;
-            while ((idx = buffer.indexOf("\n")) >= 0) {
-              const line = buffer.slice(0, idx).trim();
-              buffer = buffer.slice(idx + 1);
-              const level = parseInt(line, 10);
-              if (Number.isNaN(level)) continue;
-              const clap = level >= sensRef.current;
-              const ch = channelRef.current;
-              if (ch) ch.send({ type: "broadcast", event: "sensor", payload: { level, clap } });
-            }
-          }
-        } catch {
-          // ignore
-        } finally {
-          setSerialStatus("Desconectado");
-          try { await reader.releaseLock(); } catch {}
-          try { await port.close(); } catch {}
-          serialReaderRef.current = null;
-          serialPortRef.current = null;
-        }
-      })();
-    } catch (e) {
-      console.error(e);
-      setSerialStatus("Error/Cancelado");
+  try {
+    if (!("serial" in navigator)) {
+      alert("Tu navegador no soporta Web Serial");
+      return;
     }
-  }, []);
+    // @ts-expect-error
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 9600 }); // tu UNO R3
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable);
+    const reader = decoder.readable.getReader();
+    serialReaderRef.current = reader;
+    serialPortRef.current = port;
+    setSerialStatus("Conectado");
+
+    (async function readSerialLoop() {
+      let buffer = "";
+      try {
+        while (serialReaderRef.current) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (!value) continue;
+
+          buffer += value;
+          let idx;
+          while ((idx = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+
+            // -------- A PARTIR DE AQUÍ: NORMALIZACIÓN Y ENVÍO --------
+            const level = parseInt(line, 10);
+            if (Number.isNaN(level)) continue;
+
+            // 1) baseline por EMA
+            baseRef.current =
+              baseRef.current === 0
+                ? level
+                : baseRef.current * 0.98 + level * 0.02;
+
+            // 2) desviación sobre el baseline
+            const dev = Math.max(0, level - baseRef.current);
+
+            // 3) pico dinámico con suave decaimiento
+            peakRef.current = Math.max(
+              dev,
+              peakRef.current * 0.995 + 1e-6
+            );
+
+            // 4) normalización 0..1 + curva gamma + low-pass
+            let norm = dev / (peakRef.current || 1);
+            norm = Math.pow(Math.max(0, Math.min(1, norm)), 0.6);
+            normLPFRef.current = normLPFRef.current * 0.7 + norm * 0.3;
+
+            // 5) umbral de palmada según sensibilidad (10..300 -> ~0.05..0.9)
+            const thr = Math.max(0.05, Math.min(0.9, sensRef.current / 300));
+            const clap = normLPFRef.current > thr;
+
+            // 6) throttle ~40 Hz
+            const now = Date.now();
+            if (now - lastSentRef.current > 25) {
+              lastSentRef.current = now;
+              const ch = channelRef.current;
+              if (ch) {
+                ch.send({
+                  type: "broadcast",
+                  event: "sensor",
+                  payload: { norm: normLPFRef.current, clap },
+                });
+              }
+            }
+            // -------- FIN DEL BLOQUE DE NORMALIZACIÓN --------
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        setSerialStatus("Desconectado");
+        try { await reader.releaseLock(); } catch {}
+        try { await port.close(); } catch {}
+        serialReaderRef.current = null;
+        serialPortRef.current = null;
+      }
+    })();
+  } catch (e) {
+    console.error(e);
+    setSerialStatus("Error/Cancelado");
+  }
+}, []);
+
+
+  // Filtros para normalización
+const baseRef     = useRef(0);   // baseline (EMA)
+const peakRef     = useRef(1);   // pico dinámico que decae
+const normLPFRef  = useRef(0);   // suavizado de norm
+const lastSentRef = useRef(0);   // throttle de envío
+
 
   useEffect(() => {
     // cleanup al desmontar

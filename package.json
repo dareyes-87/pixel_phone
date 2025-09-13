@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "bridge": "node bridge/arduino-bridge.mjs",
+    "bridge:win": "set SERIAL_PORT=COM3 && node bridge/arduino-bridge.mjs",
+    "bridge:list": "node -e \"import('serialport').then(m=>m.SerialPort.list().then(console.log))\""
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

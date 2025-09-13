@@ -1,7 +1,7 @@
-// src/pages/PixelUser.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { supabase } from "../libs/supabaseClient"; // ajusta ruta si usas ../lib/
+import { supabase } from "../libs/supabaseClient";
+
 type EffectKind = "solid" | "blink" | "wave" | "gradient";
 
 function useQuery() {
@@ -14,6 +14,20 @@ interface EffectPayload {
   colors: [string, string];
   speedMs: number;
   intensity: number; // 0.1–1
+}
+
+// helpers
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+function lerpColor(aHex: string, bHex: string, t: number) {
+  // mezcla a->b
+  const a = parseInt(aHex.replace("#",""), 16);
+  const b = parseInt(bHex.replace("#",""), 16);
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const b2 = Math.round(ab + (bb - ab) * t);
+  return `rgb(${r}, ${g}, ${b2})`;
 }
 
 export default function PixelUser() {
@@ -29,11 +43,13 @@ export default function PixelUser() {
   const auto = query.get("auto") === "1";
 
   const deviceKey = useMemo(
-    () => localStorage.getItem("pixel:deviceKey") || (() => {
-      const k = "client-" + Math.random().toString(36).slice(2);
-      localStorage.setItem("pixel:deviceKey", k);
-      return k;
-    })(),
+    () =>
+      localStorage.getItem("pixel:deviceKey") ||
+      (() => {
+        const k = "client-" + Math.random().toString(36).slice(2);
+        localStorage.setItem("pixel:deviceKey", k);
+        return k;
+      })(),
     []
   );
 
@@ -49,10 +65,13 @@ export default function PixelUser() {
   // ===== Estado visual =====
   const [bg, setBg] = useState<string>("#000000");
   const [useGradient, setUseGradient] = useState(false);
-  const [gradCSS, setGradCSS] = useState<string>(""); // para gradient
+  const [gradCSS, setGradCSS] = useState<string>("");
   const [eventName, setEventName] = useState<string>("");
 
-  // Efecto en curso
+  // Último efecto (lo necesitamos para modo música)
+  const lastEffectRef = useRef<EffectPayload | null>(null);
+
+  // Relojes / flags
   const rafRef = useRef<number | null>(null);
   const intervalRef = useRef<number | null>(null);
   const musicModeRef = useRef(false);
@@ -60,8 +79,14 @@ export default function PixelUser() {
 
   // ===== Helpers =====
   const clearTimers = useCallback(() => {
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    if (intervalRef.current) { window.clearInterval(intervalRef.current); intervalRef.current = null; }
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (intervalRef.current) {
+      window.clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
   }, []);
 
   const stopVisuals = useCallback(() => {
@@ -70,75 +95,98 @@ export default function PixelUser() {
     setBg("#000000");
   }, [clearTimers]);
 
-  const startSolid = useCallback((p: EffectPayload) => {
-    clearTimers();
-    setUseGradient(false);
-    setBg(p.colors[0]);
-  }, [clearTimers]);
+  const startSolid = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(false);
+      setBg(p.colors[0]);
+    },
+    [clearTimers]
+  );
 
-  const startBlink = useCallback((p: EffectPayload) => {
-    clearTimers();
-    setUseGradient(false);
-    const on = p.colors[0];
-    const off = "#000000";
-    let state = false;
-    setBg(off);
-    intervalRef.current = window.setInterval(() => {
-      state = !state;
-      setBg(state ? on : off);
-    }, Math.max(50, p.speedMs));
-  }, [clearTimers]);
+  const startBlink = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(false);
+      const on = p.colors[0];
+      const off = "#000000";
+      let state = false;
+      setBg(off);
+      intervalRef.current = window.setInterval(() => {
+        state = !state;
+        setBg(state ? on : off);
+      }, Math.max(50, p.speedMs));
+    },
+    [clearTimers]
+  );
 
-  const startWave = useCallback((p: EffectPayload) => {
-    clearTimers();
-    setUseGradient(false);
-    const a = p.colors[0];
-    const off = "#000000";
-    const period = Math.max(120, p.speedMs); // ms por ciclo
-    const myOffset = (phase % period);       // desfase por dispositivo
+  const startWave = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(false);
+      const a = p.colors[0];
+      const off = "#000000";
+      const period = Math.max(120, p.speedMs);
+      const myOffset = phase % period;
 
-    const loop = () => {
-      const t = (Date.now() + myOffset) % period;
-      // seno 0..1 -> umbral por intensidad
-      const s = (Math.sin((t / period) * Math.PI * 2) + 1) / 2;
-      const on = s > (1 - p.intensity);
-      setBg(on ? a : off);
+      const loop = () => {
+        const t = (Date.now() + myOffset) % period;
+        const s = (Math.sin((t / period) * Math.PI * 2) + 1) / 2;
+        const on = s > (1 - p.intensity);
+        setBg(on ? a : off);
+        rafRef.current = requestAnimationFrame(loop);
+      };
       rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-  }, [clearTimers, phase]);
+    },
+    [clearTimers, phase]
+  );
 
-  const startGradient = useCallback((p: EffectPayload) => {
-    clearTimers();
-    setUseGradient(true);
-    let angle = 0;
-    const step = Math.max(0.03, 1000 / Math.max(60, p.speedMs)); // deg/frame aproximado
-    const loop = () => {
-      angle = (angle + step) % 360;
-      setGradCSS(`linear-gradient(${angle}deg, ${p.colors[0]}, ${p.colors[1]})`);
+  const startGradient = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(true);
+      let angle = 0;
+      const step = Math.max(0.03, 1000 / Math.max(60, p.speedMs));
+      const loop = () => {
+        angle = (angle + step) % 360;
+        setGradCSS(`linear-gradient(${angle}deg, ${p.colors[0]}, ${p.colors[1]})`);
+        rafRef.current = requestAnimationFrame(loop);
+      };
       rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-  }, [clearTimers]);
+    },
+    [clearTimers]
+  );
 
-  const startEffect = useCallback((payload: EffectPayload, startAt?: number) => {
-    const run = () => {
-      switch (payload.effect) {
-        case "solid": startSolid(payload); break;
-        case "blink": startBlink(payload); break;
-        case "wave": startWave(payload); break;
-        case "gradient": startGradient(payload); break;
+  const startEffect = useCallback(
+    (payload: EffectPayload, startAt?: number) => {
+      lastEffectRef.current = payload; // guarda para modo música
+      const run = () => {
+        switch (payload.effect) {
+          case "solid":
+            startSolid(payload);
+            break;
+          case "blink":
+            startBlink(payload);
+            break;
+          case "wave":
+            startWave(payload);
+            break;
+          case "gradient":
+            startGradient(payload);
+            break;
+        }
+      };
+      if (startAt && startAt > Date.now()) {
+        const delay = Math.min(5000, startAt - Date.now());
+        setTimeout(run, delay);
+      } else {
+        run();
       }
-    };
-    if (startAt && startAt > Date.now()) {
-      const delay = Math.min(5000, startAt - Date.now());
-      setTimeout(run, delay);
-    } else {
-      run();
-    }
-  }, [startSolid, startBlink, startWave, startGradient]);
+    },
+    [startSolid, startBlink, startWave, startGradient]
+  );
 
-  // Pequeño flash cuando llega un "clap" del modo música
+  // Flash en cada CLAP
   const flashRef = useRef<number | null>(null);
   const doFlash = useCallback(() => {
     if (flashRef.current) window.clearTimeout(flashRef.current);
@@ -146,20 +194,23 @@ export default function PixelUser() {
     setUseGradient(false);
     setBg("#ffffff");
     flashRef.current = window.setTimeout(() => {
-      if (prev.gradOn) { setUseGradient(true); setGradCSS(prev.gradSnapshot); }
-      else { setBg(prev.bgSnapshot); }
+      if (prev.gradOn) {
+        setUseGradient(true);
+        setGradCSS(prev.gradSnapshot);
+      } else {
+        setBg(prev.bgSnapshot);
+      }
     }, 90);
   }, [bg, gradCSS, useGradient]);
 
   // ===== Conexión Realtime =====
   useEffect(() => {
     const id = (eventId || "").trim();
-    if (!id) return; // si no hay evento, no conectamos
+    if (!id) return;
 
     setEventName(id);
     localStorage.setItem("currentEventName", id);
 
-    // Canal
     const ch = supabase.channel(`event:${id}`, {
       config: { broadcast: { ack: true }, presence: { key: deviceKey } },
     });
@@ -179,9 +230,21 @@ export default function PixelUser() {
       musicModeRef.current = !!music;
     });
 
+    // Nuevo: usa la amplitud (norm) para mezclar ColorB->ColorA en modo música
     ch.on("broadcast", { event: "sensor" }, (msg) => {
-      const { clap } = (msg.payload || {}) as { level?: number; clap?: boolean };
-      if (musicModeRef.current && clap) doFlash();
+      const { norm, clap } = (msg.payload || {}) as { norm?: number; clap?: boolean };
+      if (!musicModeRef.current) return;
+
+      if (clap) doFlash();
+
+      if (typeof norm === "number") {
+        const eff = lastEffectRef.current;
+        if (!eff) return; // si aún no se envió ningún efecto, no hay colores base
+        const t = clamp01(norm); // 0..1
+        const mixed = lerpColor(eff.colors[1], eff.colors[0], t); // B->A
+        setUseGradient(false);
+        setBg(mixed);
+      }
     });
 
     ch.subscribe((status) => {
@@ -191,7 +254,10 @@ export default function PixelUser() {
     });
 
     channelRef.current = ch;
-    return () => { ch.unsubscribe(); channelRef.current = null; };
+    return () => {
+      ch.unsubscribe();
+      channelRef.current = null;
+    };
   }, [eventId, deviceKey, phase, doFlash, startEffect, stopVisuals]);
 
   // ===== Fullscreen / WakeLock si viene auto=1 =====
@@ -199,10 +265,10 @@ export default function PixelUser() {
     if (!auto) return;
     const tryFs = async () => {
       try {
-        // Algunos navegadores exigen interacción; si falla, simplemente continúa
         await document.documentElement.requestFullscreen?.();
-        
-        if ("wakeLock" in navigator) { await (navigator as any).wakeLock.request("screen"); }
+        if ("wakeLock" in navigator) {
+          await (navigator as any).wakeLock.request("screen");
+        }
       } catch {}
     };
     tryFs();
@@ -210,7 +276,6 @@ export default function PixelUser() {
 
   // ===== Interacción local mínima (fallback) =====
   const handleTap = () => {
-    // Si no hay efecto activo, alterna a modo demo
     if (!intervalRef.current && !rafRef.current) {
       setBg((c) => (c === "#000000" ? "#ffffff" : "#000000"));
     }
