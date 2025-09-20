@@ -17,7 +17,7 @@ interface EffectPayload {
   intensity: number; // 0.1–1
 }
 
-// ====== S O N I D O S  (importa tus assets) ======
+// ====== S O N I D O S ======
 import aplausos from "../sounds/aplausos.wav";
 import coin from "../sounds/coin.mp3";
 import errorSnd from "../sounds/error.wav";
@@ -57,7 +57,7 @@ export default function PixelUser() {
   const navigate = useNavigate();
   const query = useQuery();
 
-  // ===== Params / persistencia simple =====
+  // ===== Params / persistencia =====
   const eventId = useMemo(() => {
     const q = query.get("event")?.trim() || "";
     return q || localStorage.getItem("currentEventName") || "";
@@ -76,7 +76,7 @@ export default function PixelUser() {
     []
   );
 
-  // Fase aleatoria para wave (distribuye el patrón entre dispositivos)
+  // Fase aleatoria para wave
   const phase = useMemo(() => {
     const k = localStorage.getItem("pixel:phase");
     if (k) return Number(k) || 0;
@@ -91,7 +91,7 @@ export default function PixelUser() {
   const [gradCSS, setGradCSS] = useState<string>("");
   const [eventName, setEventName] = useState<string>("");
 
-  // Último efecto (para modo música)
+  // Último efecto (modo música)
   const lastEffectRef = useRef<EffectPayload | null>(null);
 
   // Relojes / flags
@@ -100,7 +100,7 @@ export default function PixelUser() {
   const musicModeRef = useRef(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // ====== Wake Lock / Fullscreen ======
+  // ===== Wake Lock / Fullscreen =====
   const wakeRef = useRef<any>(null);
   const requestWakeLock = useCallback(async () => {
     try {
@@ -108,7 +108,7 @@ export default function PixelUser() {
       wakeRef.current = await navigator.wakeLock?.request?.("screen");
       document.addEventListener("visibilitychange", async () => {
         if (document.visibilityState === "visible" && wakeRef.current?.released) {
-          try { /* reintentar */ 
+          try {
             
             wakeRef.current = await navigator.wakeLock?.request?.("screen");
           } catch {}
@@ -126,11 +126,16 @@ export default function PixelUser() {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen?.();
       }
-      // Bloquea orientación si es posible (mejor luminancia y UX)
       // @ts-expect-error
       await screen.orientation?.lock?.("portrait");
     } catch {}
   }, []);
+
+  // Wake Lock desde el inicio (sin interacción)
+  useEffect(() => {
+    (async () => { await requestWakeLock(); })();
+    return () => { releaseWakeLock(); };
+  }, [requestWakeLock, releaseWakeLock]);
 
   // ===== Helpers =====
   const clearTimers = useCallback(() => {
@@ -148,109 +153,10 @@ export default function PixelUser() {
     clearTimers();
     setUseGradient(false);
     setBg("#000000");
+    setTorch(false); // apaga linterna al detener
   }, [clearTimers]);
 
-  const startSolid = useCallback(
-    (p: EffectPayload) => {
-      clearTimers();
-      setUseGradient(false);
-      setBg(p.colors[0]);
-    },
-    [clearTimers]
-  );
-
-  const startBlink = useCallback(
-    (p: EffectPayload) => {
-      clearTimers();
-      setUseGradient(false);
-      const on = p.colors[0];
-      const off = "#000000";
-      let state = false;
-      setBg(off);
-      intervalRef.current = window.setInterval(() => {
-        state = !state;
-        setBg(state ? on : off);
-      }, Math.max(50, p.speedMs));
-    },
-    [clearTimers]
-  );
-
-  const startWave = useCallback(
-    (p: EffectPayload) => {
-      clearTimers();
-      setUseGradient(false);
-      const a = p.colors[0];
-      const off = "#000000";
-      const period = Math.max(120, p.speedMs);
-      const myOffset = phase % period;
-
-      const loop = () => {
-        const t = (Date.now() + myOffset) % period;
-        const s = (Math.sin((t / period) * Math.PI * 2) + 1) / 2;
-        const on = s > (1 - p.intensity);
-        setBg(on ? a : off);
-        rafRef.current = requestAnimationFrame(loop);
-      };
-      rafRef.current = requestAnimationFrame(loop);
-    },
-    [clearTimers, phase]
-  );
-
-  const startGradient = useCallback(
-    (p: EffectPayload) => {
-      clearTimers();
-      setUseGradient(true);
-      let angle = 0;
-      const step = Math.max(0.03, 1000 / Math.max(60, p.speedMs));
-      const loop = () => {
-        angle = (angle + step) % 360;
-        setGradCSS(`linear-gradient(${angle}deg, ${p.colors[0]}, ${p.colors[1]})`);
-        rafRef.current = requestAnimationFrame(loop);
-      };
-      rafRef.current = requestAnimationFrame(loop);
-    },
-    [clearTimers]
-  );
-
-  const startEffect = useCallback(
-    (payload: EffectPayload, startAt?: number) => {
-      lastEffectRef.current = payload;
-      const run = () => {
-        switch (payload.effect) {
-          case "solid":    startSolid(payload); break;
-          case "blink":    startBlink(payload); break;
-          case "wave":     startWave(payload); break;
-          case "gradient": startGradient(payload); break;
-        }
-      };
-      if (startAt && startAt > Date.now()) {
-        const delay = Math.min(5000, startAt - Date.now());
-        setTimeout(run, delay);
-      } else {
-        run();
-      }
-    },
-    [startSolid, startBlink, startWave, startGradient]
-  );
-
-  // ===== Flash visual por CLAP =====
-  const flashRef = useRef<number | null>(null);
-  const doFlash = useCallback(() => {
-    if (flashRef.current) window.clearTimeout(flashRef.current);
-    const prev = { bgSnapshot: bg, gradSnapshot: gradCSS, gradOn: useGradient };
-    setUseGradient(false);
-    setBg("#ffffff");
-    flashRef.current = window.setTimeout(() => {
-      if (prev.gradOn) {
-        setUseGradient(true);
-        setGradCSS(prev.gradSnapshot);
-      } else {
-        setBg(prev.bgSnapshot);
-      }
-    }, 90);
-  }, [bg, gradCSS, useGradient]);
-
-  // ====== L I N T E R N A (TORCH) ======
+  // ===== Linterna (torch) =====
   const torchTrackRef = useRef<MediaStreamTrack | null>(null);
   const torchOnRef = useRef(false);
 
@@ -276,24 +182,131 @@ export default function PixelUser() {
             // @ts-expect-error
             await torchTrackRef.current.applyConstraints({ advanced: [{ torch: false }] });
           } catch {}
-          torchTrackRef.current.stop();
-          torchTrackRef.current = null;
         }
+        torchTrackRef.current?.stop?.();
+        torchTrackRef.current = null;
         torchOnRef.current = false;
       }
     } catch (e) {
-      console.warn("Torch no soportado en este dispositivo/navegador:", e);
-      // fallback visual: pantalla blanca intensa
+      console.warn("Torch no soportado, fallback visual:", e);
       setUseGradient(false);
       setBg(on ? "#ffffff" : "#000000");
       torchOnRef.current = on;
     }
-  }, [setBg]);
+  }, []);
 
-  // ====== A U D I O  (WebAudio con precarga) ======
+  // ===== Efectos (con linterna integrada) =====
+  const startSolid = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(false);
+      setBg(p.colors[0]);
+      setTorch(true); // linterna encendida
+    },
+    [clearTimers, setTorch]
+  );
+
+  const startBlink = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(false);
+      const onCol = p.colors[0];
+      const offCol = "#000000";
+      let state = false;
+      setBg(offCol);
+      intervalRef.current = window.setInterval(() => {
+        state = !state;
+        setBg(state ? onCol : offCol);
+        setTorch(state); // sincroniza con parpadeo
+      }, Math.max(50, p.speedMs));
+    },
+    [clearTimers, setTorch]
+  );
+
+  const startWave = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(false);
+      const a = p.colors[0];
+      const off = "#000000";
+      const period = Math.max(120, p.speedMs);
+      const myOffset = phase % period;
+      let lastTorch = torchOnRef.current;
+
+      const loop = () => {
+        const t = (Date.now() + myOffset) % period;
+        const s = (Math.sin((t / period) * Math.PI * 2) + 1) / 2;
+        const on = s > (1 - p.intensity);
+        setBg(on ? a : off);
+        if (on !== lastTorch) {
+          lastTorch = on;
+          setTorch(on);
+        }
+        rafRef.current = requestAnimationFrame(loop);
+      };
+      rafRef.current = requestAnimationFrame(loop);
+    },
+    [clearTimers, phase, setTorch]
+  );
+
+  const startGradient = useCallback(
+    (p: EffectPayload) => {
+      clearTimers();
+      setUseGradient(true);
+      setTorch(false); // linterna apagada en gradiente
+      let angle = 0;
+      const step = Math.max(0.03, 1000 / Math.max(60, p.speedMs));
+      const loop = () => {
+        angle = (angle + step) % 360;
+        setGradCSS(`linear-gradient(${angle}deg, ${p.colors[0]}, ${p.colors[1]})`);
+        rafRef.current = requestAnimationFrame(loop);
+      };
+      rafRef.current = requestAnimationFrame(loop);
+    },
+    [clearTimers, setTorch]
+  );
+
+  const startEffect = useCallback(
+    (payload: EffectPayload, startAt?: number) => {
+      lastEffectRef.current = payload;
+      const run = () => {
+        switch (payload.effect) {
+          case "solid":    startSolid(payload); break;
+          case "blink":    startBlink(payload); break;
+          case "wave":     startWave(payload); break;
+          case "gradient": startGradient(payload); break;
+        }
+      };
+      if (startAt && startAt > Date.now()) {
+        const delay = Math.min(5000, startAt - Date.now());
+        setTimeout(run, delay);
+      } else {
+        run();
+      }
+    },
+    [startSolid, startBlink, startWave, startGradient]
+  );
+
+  // Flash visual por CLAP (modo música)
+  const flashRef = useRef<number | null>(null);
+  const doFlash = useCallback(() => {
+    if (flashRef.current) window.clearTimeout(flashRef.current);
+    const prev = { bgSnapshot: bg, gradSnapshot: gradCSS, gradOn: useGradient };
+    setUseGradient(false);
+    setBg("#ffffff");
+    flashRef.current = window.setTimeout(() => {
+      if (prev.gradOn) {
+        setUseGradient(true);
+        setGradCSS(prev.gradSnapshot);
+      } else {
+        setBg(prev.bgSnapshot);
+      }
+    }, 90);
+  }, [bg, gradCSS, useGradient]);
+
+  // ===== Audio (WebAudio con precarga) =====
   const audioCtxRef = useRef<AudioContext | null>(null);
   const buffersRef = useRef<Map<number, AudioBuffer>>(new Map());
-  const audioReadyRef = useRef(false);
   const [needsTap, setNeedsTap] = useState(true);
 
   const ensureAudioCtx = useCallback(() => {
@@ -322,7 +335,6 @@ export default function PixelUser() {
         const ctx = ensureAudioCtx();
         if (ctx.state !== "running") await ctx.resume();
         if (buffersRef.current.size === 0) await preloadSounds();
-        audioReadyRef.current = true;
         setNeedsTap(false);
       } catch (e) {
         console.warn("Audio unlock error:", e);
@@ -335,10 +347,9 @@ export default function PixelUser() {
   const playSound = useCallback(async (id: number) => {
     const ctx = ensureAudioCtx();
     if (ctx.state !== "running") {
-      // pedir toque
       setNeedsTap(true);
       try { await ctx.resume(); } catch {}
-      if (ctx.state !== "running") return; // aún bloqueado
+      if (ctx.state !== "running") return;
     }
     if (buffersRef.current.size === 0) {
       try { await preloadSounds(); } catch {}
@@ -349,7 +360,7 @@ export default function PixelUser() {
     const src = ctx.createBufferSource();
     src.buffer = buf;
     const gain = ctx.createGain();
-    gain.gain.value = 0.85;
+    gain.gain.value = 0.9;
     src.connect(gain).connect(ctx.destination);
     src.start();
   }, [ensureAudioCtx, preloadSounds]);
@@ -367,7 +378,8 @@ export default function PixelUser() {
     });
 
     ch.on("broadcast", { event: "cmd" }, (msg) => {
-      const { type, startAt, payload } = (msg.payload || {}) as any;
+      const p: any = msg.payload || {};
+      const { type, startAt, payload } = p;
 
       if (type === "stop") {
         stopVisuals();
@@ -379,15 +391,17 @@ export default function PixelUser() {
         return;
       }
 
-      if (type === "flash") {
-        const desired = typeof payload?.on === "boolean" ? !!payload.on : !torchOnRef.current;
-        setTorch(desired);
+      // Soporta { type:'sound', id } o { type:'sound', payload:{id} }
+      if (type === "sound") {
+        const idNum = Number(p?.id ?? (payload as any)?.id) || 1;
+        playSound(idNum);
         return;
       }
 
-      if (type === "sound") {
-        const idNum = Number(payload?.id) || 1;
-        playSound(idNum);
+      // (opcional: compatibilidad si alguna vez se envía flash directo)
+      if (type === "flash") {
+        const desired = typeof p?.on === "boolean" ? !!p.on : !torchOnRef.current;
+        setTorch(desired);
         return;
       }
     });
@@ -402,7 +416,11 @@ export default function PixelUser() {
       const { norm, clap } = (msg.payload || {}) as { norm?: number; clap?: boolean };
       if (!musicModeRef.current) return;
 
-      if (clap) doFlash();
+      if (clap) {
+        doFlash();
+        // Si quieres flash real con linterna en cada palmada, descomenta:
+        // setTorch(true); setTimeout(() => setTorch(false), 90);
+      }
 
       if (typeof norm === "number") {
         const eff = lastEffectRef.current;
@@ -427,18 +445,15 @@ export default function PixelUser() {
     };
   }, [eventId, deviceKey, phase, doFlash, startEffect, stopVisuals, setTorch, playSound]);
 
-  // ===== Fullscreen / WakeLock si viene auto=1 =====
+  // Fullscreen si viene auto=1
   useEffect(() => {
     if (!auto) return;
     (async () => {
       await enterFullscreen();
-      await requestWakeLock();
-      // mensaje sutil para brillo
-      setNeedsTap((v) => v); // mantiene banner si audio bloqueado
     })();
-  }, [auto, enterFullscreen, requestWakeLock]);
+  }, [auto, enterFullscreen]);
 
-  // ===== Interacción local mínima (fallback) =====
+  // Interacción local mínima (fallback)
   const handleTap = () => {
     if (!intervalRef.current && !rafRef.current) {
       setBg((c) => (c === "#000000" ? "#ffffff" : "#000000"));
@@ -448,13 +463,13 @@ export default function PixelUser() {
   const handleLeave = () => {
     localStorage.removeItem("currentEventName");
     try { channelRef.current?.unsubscribe(); } catch {}
-    stopVisuals();
+    clearTimers();
     setTorch(false);
     releaseWakeLock();
     navigate("/");
   };
 
-  // ===== Render =====
+  // Render
   return (
     <div className="relative w-screen" style={{ minHeight: "100dvh", touchAction: "manipulation" }}>
       {/* Superficie del “pixel” */}
@@ -467,7 +482,7 @@ export default function PixelUser() {
         }}
       />
 
-      {/* Aviso para brillo y audio */}
+      {/* Aviso para brillo/audio */}
       {needsTap && (
         <div
           className="pointer-events-none fixed top-0 inset-x-0 text-center text-white text-sm"
@@ -480,7 +495,7 @@ export default function PixelUser() {
         </div>
       )}
 
-      {/* Barra inferior con nombre del evento + salir */}
+      {/* Barra inferior */}
       <div
         className="pointer-events-auto fixed inset-x-0 bottom-0"
         style={{
@@ -496,12 +511,6 @@ export default function PixelUser() {
               <p className="text-base font-semibold">{eventId || eventName || "—"}</p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={async () => { await enterFullscreen(); await requestWakeLock(); }}
-                className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/20 border border-white/10"
-              >
-                Pantalla completa
-              </button>
               <button
                 onClick={handleLeave}
                 className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/20 border border-white/10"

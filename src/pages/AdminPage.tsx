@@ -36,7 +36,7 @@ export default function AdminPage() {
   const [speed, setSpeed] = useState(500);
   const [intensity, setIntensity] = useState(1);
 
-  // Historial
+  // Historial (últimos 5)
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const pushHistory = useCallback(() => {
     const item: HistoryItem = {
@@ -49,9 +49,6 @@ export default function AdminPage() {
     };
     setHistory((prev) => [item, ...prev].slice(0, 5));
   }, [effect, colorA, colorB, speed, intensity]);
-
-  // Linterna
-  const [flashOn, setFlashOn] = useState(false);
 
   // QR
   const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -80,7 +77,7 @@ export default function AdminPage() {
   const buildClientUrl = useCallback(() => {
     const id = (eventId || "").trim();
     const qs = new URLSearchParams({ event: id, auto: "1" }).toString();
-    return `${window.location.origin}/pixel?${qs}`; // tu cliente React
+    return `${window.location.origin}/pixel?${qs}`; // cliente React
   }, [eventId]);
 
   const renderQr = useCallback(async () => {
@@ -178,19 +175,6 @@ export default function AdminPage() {
     await ch.send({ type: "broadcast", event: "cmd", payload: { type: "stop" } });
   }, []);
 
-  // ===== Linterna (toggle) =====
-  const toggleFlash = useCallback(async () => {
-    const ch = channelRef.current;
-    if (!ch) return alert("Conéctate primero");
-    const next = !flashOn;
-    await ch.send({
-      type: "broadcast",
-      event: "cmd",
-      payload: { type: "flash", on: next }, // <- el cliente debe encender/apagar según 'on'
-    });
-    setFlashOn(next);
-  }, [flashOn]);
-
   // ===== Sonidos =====
   const sendSound = useCallback(async (id: number) => {
     const ch = channelRef.current;
@@ -242,7 +226,7 @@ export default function AdminPage() {
               const level = parseInt(line, 10);
               if (Number.isNaN(level)) continue;
 
-              // Normalización simple (como ya tenías)
+              // Normalización simple
               baseRef.current = baseRef.current === 0 ? level : baseRef.current * 0.98 + level * 0.02;
               const dev = Math.max(0, level - baseRef.current);
               peakRef.current = Math.max(dev, peakRef.current * 0.995 + 1e-6);
@@ -444,10 +428,10 @@ export default function AdminPage() {
             </div>
           </section>
 
-          {/* Efectos */}
+          {/* Efectos (sin botón de linterna) */}
           <section className="rounded-2xl bg-white/5 p-4 border border-white/10 mb-6">
             <h2 className="font-semibold mb-3">Efectos</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-7 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-6 gap-4">
               <div>
                 <label className="block text-sm mb-1">Efecto</label>
                 <select
@@ -514,17 +498,6 @@ export default function AdminPage() {
                   className="rounded-lg bg-white/10 px-4 py-2 border border-white/10 hover:bg-white/20"
                 >
                   Detener
-                </button>
-              </div>
-              <div className="flex items-end">
-                <button
-                  onClick={toggleFlash}
-                  className={`w-full rounded-lg px-4 py-2 border border-white/10 hover:bg-white/20 ${
-                    flashOn ? "bg-emerald-600/30" : "bg-white/10"
-                  }`}
-                  title="Enciende/Apaga las linternas de los dispositivos"
-                >
-                  {flashOn ? "Linterna: ON 🔦" : "Linterna: OFF 🔦"}
                 </button>
               </div>
             </div>
