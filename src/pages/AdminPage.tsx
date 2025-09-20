@@ -1,4 +1,3 @@
-// src/pages/AdminPage.tsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -6,9 +5,18 @@ import Squares from "../components/Squares";
 import Shuffle from "../components/Shuffle";
 import QRCode from "qrcode";
 import { TbLogout } from "react-icons/tb";
-import { supabase } from "../libs/supabaseClient"; // ajusta a ../lib/ si aplica
+import { supabase } from "../libs/supabaseClient";
 
 type EffectKind = "solid" | "blink" | "wave" | "gradient";
+
+type HistoryItem = {
+  efecto: EffectKind;
+  colorA: string;
+  colorB: string;
+  velocidad: number;
+  intensidad: number;
+  hora: string;
+};
 
 export default function AdminPage() {
   const { user } = useAuth();
@@ -27,6 +35,23 @@ export default function AdminPage() {
   const [colorB, setColorB] = useState("#09233a");
   const [speed, setSpeed] = useState(500);
   const [intensity, setIntensity] = useState(1);
+
+  // Historial
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const pushHistory = useCallback(() => {
+    const item: HistoryItem = {
+      efecto: effect,
+      colorA,
+      colorB,
+      velocidad: speed,
+      intensidad: intensity,
+      hora: new Date().toLocaleTimeString(),
+    };
+    setHistory((prev) => [item, ...prev].slice(0, 5));
+  }, [effect, colorA, colorB, speed, intensity]);
+
+  // Linterna
+  const [flashOn, setFlashOn] = useState(false);
 
   // QR
   const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -55,7 +80,7 @@ export default function AdminPage() {
   const buildClientUrl = useCallback(() => {
     const id = (eventId || "").trim();
     const qs = new URLSearchParams({ event: id, auto: "1" }).toString();
-    return `${window.location.origin}/pixel?${qs}`; // cliente React
+    return `${window.location.origin}/pixel?${qs}`; // tu cliente React
   }, [eventId]);
 
   const renderQr = useCallback(async () => {
@@ -119,17 +144,14 @@ export default function AdminPage() {
   const createEvent = useCallback(async () => {
     const id = eventId.trim();
     if (!id) { alert("Escribe un nombre/ID de evento"); return; }
-
-    // Si ya había conexión, la cerramos para evitar mezclar eventos
     if (channelRef.current) {
       try { await channelRef.current.unsubscribe(); } catch {}
       channelRef.current = null;
       setConnected(false);
       setCount(0);
     }
-
     localStorage.setItem("olas:eventId", id);
-    await renderQr(); // refresca el QR del cliente
+    await renderQr();
   }, [eventId, renderQr]);
 
   const payloadEffect = useCallback(() => ({
@@ -156,6 +178,30 @@ export default function AdminPage() {
     await ch.send({ type: "broadcast", event: "cmd", payload: { type: "stop" } });
   }, []);
 
+  // ===== Linterna (toggle) =====
+  const toggleFlash = useCallback(async () => {
+    const ch = channelRef.current;
+    if (!ch) return alert("Conéctate primero");
+    const next = !flashOn;
+    await ch.send({
+      type: "broadcast",
+      event: "cmd",
+      payload: { type: "flash", on: next }, // <- el cliente debe encender/apagar según 'on'
+    });
+    setFlashOn(next);
+  }, [flashOn]);
+
+  // ===== Sonidos =====
+  const sendSound = useCallback(async (id: number) => {
+    const ch = channelRef.current;
+    if (!ch) return alert("Conéctate primero");
+    await ch.send({
+      type: "broadcast",
+      event: "cmd",
+      payload: { type: "sound", id }, // 1..9
+    });
+  }, []);
+
   // ======= Modo música (USB) =======
   const setMusicMode = useCallback(async (on: boolean) => {
     const ch = channelRef.current;
@@ -164,105 +210,86 @@ export default function AdminPage() {
   }, []);
 
   const connectSerial = useCallback(async () => {
-  try {
-    if (!("serial" in navigator)) {
-      alert("Tu navegador no soporta Web Serial");
-      return;
-    }
-    // @ts-expect-error
-    const port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 9600 }); // tu UNO R3
-    const decoder = new TextDecoderStream();
-    port.readable.pipeTo(decoder.writable);
-    const reader = decoder.readable.getReader();
-    serialReaderRef.current = reader;
-    serialPortRef.current = port;
-    setSerialStatus("Conectado");
+    try {
+      if (!("serial" in navigator)) {
+        alert("Tu navegador no soporta Web Serial");
+        return;
+      }
+      // @ts-expect-error
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 9600 });
+      const decoder = new TextDecoderStream();
+      port.readable.pipeTo(decoder.writable);
+      const reader = decoder.readable.getReader();
+      serialReaderRef.current = reader;
+      serialPortRef.current = port;
+      setSerialStatus("Conectado");
 
-    (async function readSerialLoop() {
-      let buffer = "";
-      try {
-        while (serialReaderRef.current) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (!value) continue;
+      (async function readSerialLoop() {
+        let buffer = "";
+        try {
+          while (serialReaderRef.current) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (!value) continue;
 
-          buffer += value;
-          let idx;
-          while ((idx = buffer.indexOf("\n")) >= 0) {
-            const line = buffer.slice(0, idx).trim();
-            buffer = buffer.slice(idx + 1);
+            buffer += value;
+            let idx;
+            while ((idx = buffer.indexOf("\n")) >= 0) {
+              const line = buffer.slice(0, idx).trim();
+              buffer = buffer.slice(idx + 1);
 
-            // -------- A PARTIR DE AQUÍ: NORMALIZACIÓN Y ENVÍO --------
-            const level = parseInt(line, 10);
-            if (Number.isNaN(level)) continue;
+              const level = parseInt(line, 10);
+              if (Number.isNaN(level)) continue;
 
-            // 1) baseline por EMA
-            baseRef.current =
-              baseRef.current === 0
-                ? level
-                : baseRef.current * 0.98 + level * 0.02;
+              // Normalización simple (como ya tenías)
+              baseRef.current = baseRef.current === 0 ? level : baseRef.current * 0.98 + level * 0.02;
+              const dev = Math.max(0, level - baseRef.current);
+              peakRef.current = Math.max(dev, peakRef.current * 0.995 + 1e-6);
+              let norm = dev / (peakRef.current || 1);
+              norm = Math.pow(Math.max(0, Math.min(1, norm)), 0.6);
+              normLPFRef.current = normLPFRef.current * 0.7 + norm * 0.3;
 
-            // 2) desviación sobre el baseline
-            const dev = Math.max(0, level - baseRef.current);
+              const thr = Math.max(0.05, Math.min(0.9, sensRef.current / 300));
+              const clap = normLPFRef.current > thr;
 
-            // 3) pico dinámico con suave decaimiento
-            peakRef.current = Math.max(
-              dev,
-              peakRef.current * 0.995 + 1e-6
-            );
-
-            // 4) normalización 0..1 + curva gamma + low-pass
-            let norm = dev / (peakRef.current || 1);
-            norm = Math.pow(Math.max(0, Math.min(1, norm)), 0.6);
-            normLPFRef.current = normLPFRef.current * 0.7 + norm * 0.3;
-
-            // 5) umbral de palmada según sensibilidad (10..300 -> ~0.05..0.9)
-            const thr = Math.max(0.05, Math.min(0.9, sensRef.current / 300));
-            const clap = normLPFRef.current > thr;
-
-            // 6) throttle ~40 Hz
-            const now = Date.now();
-            if (now - lastSentRef.current > 25) {
-              lastSentRef.current = now;
-              const ch = channelRef.current;
-              if (ch) {
-                ch.send({
-                  type: "broadcast",
-                  event: "sensor",
-                  payload: { norm: normLPFRef.current, clap },
-                });
+              const now = Date.now();
+              if (now - lastSentRef.current > 25) {
+                lastSentRef.current = now;
+                const ch = channelRef.current;
+                if (ch) {
+                  ch.send({
+                    type: "broadcast",
+                    event: "sensor",
+                    payload: { norm: normLPFRef.current, clap },
+                  });
+                }
               }
             }
-            // -------- FIN DEL BLOQUE DE NORMALIZACIÓN --------
           }
+        } catch {
+          // ignore
+        } finally {
+          setSerialStatus("Desconectado");
+          try { await reader.releaseLock(); } catch {}
+          try { await port.close(); } catch {}
+          serialReaderRef.current = null;
+          serialPortRef.current = null;
         }
-      } catch {
-        // ignore
-      } finally {
-        setSerialStatus("Desconectado");
-        try { await reader.releaseLock(); } catch {}
-        try { await port.close(); } catch {}
-        serialReaderRef.current = null;
-        serialPortRef.current = null;
-      }
-    })();
-  } catch (e) {
-    console.error(e);
-    setSerialStatus("Error/Cancelado");
-  }
-}, []);
-
+      })();
+    } catch (e) {
+      console.error(e);
+      setSerialStatus("Error/Cancelado");
+    }
+  }, []);
 
   // Filtros para normalización
-const baseRef     = useRef(0);   // baseline (EMA)
-const peakRef     = useRef(1);   // pico dinámico que decae
-const normLPFRef  = useRef(0);   // suavizado de norm
-const lastSentRef = useRef(0);   // throttle de envío
-
+  const baseRef     = useRef(0);
+  const peakRef     = useRef(1);
+  const normLPFRef  = useRef(0);
+  const lastSentRef = useRef(0);
 
   useEffect(() => {
-    // cleanup al desmontar
     return () => {
       disconnect();
       (async () => {
@@ -272,13 +299,12 @@ const lastSentRef = useRef(0);   // throttle de envío
     };
   }, [disconnect]);
 
-  // ======= Logout =======
   const handleSignOut = async () => { await supabase.auth.signOut(); navigate("/"); };
 
   // ======= UI =======
   return (
     <div className="relative min-h-screen text-white bg-[#0e0f16]" style={{ isolation: "isolate" }}>
-      {/* Fondo animado */}
+      {/* Fondo */}
       <div className="absolute inset-0 z-0 pointer-events-none p-3">
         <Squares
           direction="diagonal"
@@ -330,7 +356,6 @@ const lastSentRef = useRef(0);   // throttle de envío
           <section className="rounded-2xl bg-white/5 p-4 border border-white/10 mb-6">
             <h2 className="font-semibold mb-3">Evento</h2>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* Col 1: Event ID */}
               <div>
                 <label className="block text-sm mb-1">Event ID</label>
                 <input
@@ -340,8 +365,6 @@ const lastSentRef = useRef(0);   // throttle de envío
                   placeholder="MI-EVENTO-2025"
                 />
               </div>
-
-              {/* Col 2: Crear */}
               <div className="flex items-end">
                 <button
                   onClick={createEvent}
@@ -350,8 +373,6 @@ const lastSentRef = useRef(0);   // throttle de envío
                   Crear
                 </button>
               </div>
-
-              {/* Col 3: Conectar / Desconectar + contador */}
               <div className="flex items-end gap-3">
                 <button
                   onClick={connect}
@@ -372,7 +393,7 @@ const lastSentRef = useRef(0);   // throttle de envío
             </div>
           </section>
 
-          {/* Cliente rápido (QR & Link) */}
+          {/* Cliente rápido */}
           <section className="rounded-2xl bg-white/5 p-4 border border-white/10 mb-6">
             <h2 className="font-semibold mb-3">Cliente rápido (QR & Link)</h2>
             <div className="flex flex-wrap items-start gap-6">
@@ -426,7 +447,7 @@ const lastSentRef = useRef(0);   // throttle de envío
           {/* Efectos */}
           <section className="rounded-2xl bg-white/5 p-4 border border-white/10 mb-6">
             <h2 className="font-semibold mb-3">Efectos</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-6 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-7 gap-4">
               <div>
                 <label className="block text-sm mb-1">Efecto</label>
                 <select
@@ -483,7 +504,7 @@ const lastSentRef = useRef(0);   // throttle de envío
               </div>
               <div className="flex items-end gap-3">
                 <button
-                  onClick={() => sendEffect(true)}
+                  onClick={async () => { pushHistory(); await sendEffect(true); }}
                   className="rounded-lg bg-white/10 px-4 py-2 border border-white/10 hover:bg-white/20"
                 >
                   Iniciar (1s)
@@ -494,6 +515,79 @@ const lastSentRef = useRef(0);   // throttle de envío
                 >
                   Detener
                 </button>
+              </div>
+              <div className="flex items-end">
+                <button
+                  onClick={toggleFlash}
+                  className={`w-full rounded-lg px-4 py-2 border border-white/10 hover:bg-white/20 ${
+                    flashOn ? "bg-emerald-600/30" : "bg-white/10"
+                  }`}
+                  title="Enciende/Apaga las linternas de los dispositivos"
+                >
+                  {flashOn ? "Linterna: ON 🔦" : "Linterna: OFF 🔦"}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Historial + Sonidos */}
+          <section className="rounded-2xl bg-white/5 p-4 border border-white/10 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* Historial */}
+              <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
+                <h3 className="text-center text-teal-200 font-semibold mb-3">Historial de efectos</h3>
+                <ul className="flex flex-col gap-2">
+                  {history.length === 0 && (
+                    <li className="text-sm text-white/60 text-center">Aún no hay historial</li>
+                  )}
+                  {history.map((item, idx) => (
+                    <li
+                      key={idx}
+                      className="cursor-pointer rounded-xl border border-teal-300/60 bg-black/50 px-3 py-2 hover:bg-black/60"
+                      onClick={() => {
+                        setEffect(item.efecto);
+                        setColorA(item.colorA);
+                        setColorB(item.colorB);
+                        setSpeed(item.velocidad);
+                        setIntensity(item.intensidad);
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span>
+                          <b>{item.efecto}</b> · {item.velocidad}ms · {item.intensidad}
+                        </span>
+                        <span className="text-xs text-teal-200/70">{item.hora}</span>
+                      </div>
+                      <div className="flex gap-2 mt-2">
+                        <span title="Color A" className="inline-block w-[18px] h-[18px] rounded-[4px] border border-teal-300/60" style={{ background: item.colorA }} />
+                        <span title="Color B" className="inline-block w-[18px] h-[18px] rounded-[4px] border border-teal-300/60" style={{ background: item.colorB }} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Sonidos */}
+              <div className="bg-white/5 rounded-2xl p-4 border border-white/10">
+                <h3 className="text-center text-teal-200 font-semibold mb-3">Efectos de sonido</h3>
+                <div className="grid grid-cols-3 gap-3">
+                  {Array.from({ length: 9 }).map((_, i) => {
+                    const id = i + 1;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => sendSound(id)}
+                        className="rounded-lg bg-white/10 px-4 py-3 border border-white/10 hover:bg-white/20"
+                      >
+                        🔊 {id}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-white/60 mt-3">
+                  Nota: en el cliente, el audio requiere <b>una interacción del usuario</b> (toque inicial) para desbloquear
+                  reproducción automática.
+                </p>
               </div>
             </div>
           </section>

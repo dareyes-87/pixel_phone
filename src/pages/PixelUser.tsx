@@ -1,3 +1,4 @@
+// src/pages/PixelUser.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../libs/supabaseClient";
@@ -16,12 +17,34 @@ interface EffectPayload {
   intensity: number; // 0.1–1
 }
 
+// ====== S O N I D O S  (importa tus assets) ======
+import aplausos from "../sounds/aplausos.wav";
+import coin from "../sounds/coin.mp3";
+import errorSnd from "../sounds/error.wav";
+import latigo from "../sounds/latigo.mp3";
+import platillos from "../sounds/platillos.mp3";
+import redoble from "../sounds/redoble.mp3";
+import suspenso from "../sounds/suspenso.mp3";
+import tambor from "../sounds/tambor.mp3";
+import triste from "../sounds/triste.mp3";
+
+const soundMap: Record<number, string> = {
+  1: aplausos,
+  2: coin,
+  3: errorSnd,
+  4: latigo,
+  5: platillos,
+  6: redoble,
+  7: suspenso,
+  8: tambor,
+  9: triste,
+};
+
 // helpers
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 function lerpColor(aHex: string, bHex: string, t: number) {
-  // mezcla a->b
-  const a = parseInt(aHex.replace("#",""), 16);
-  const b = parseInt(bHex.replace("#",""), 16);
+  const a = parseInt(aHex.replace("#", ""), 16);
+  const b = parseInt(bHex.replace("#", ""), 16);
   const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
   const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
   const r = Math.round(ar + (br - ar) * t);
@@ -68,7 +91,7 @@ export default function PixelUser() {
   const [gradCSS, setGradCSS] = useState<string>("");
   const [eventName, setEventName] = useState<string>("");
 
-  // Último efecto (lo necesitamos para modo música)
+  // Último efecto (para modo música)
   const lastEffectRef = useRef<EffectPayload | null>(null);
 
   // Relojes / flags
@@ -76,6 +99,38 @@ export default function PixelUser() {
   const intervalRef = useRef<number | null>(null);
   const musicModeRef = useRef(false);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  // ====== Wake Lock / Fullscreen ======
+  const wakeRef = useRef<any>(null);
+  const requestWakeLock = useCallback(async () => {
+    try {
+      
+      wakeRef.current = await navigator.wakeLock?.request?.("screen");
+      document.addEventListener("visibilitychange", async () => {
+        if (document.visibilityState === "visible" && wakeRef.current?.released) {
+          try { /* reintentar */ 
+            
+            wakeRef.current = await navigator.wakeLock?.request?.("screen");
+          } catch {}
+        }
+      });
+    } catch {}
+  }, []);
+  const releaseWakeLock = useCallback(async () => {
+    try { await wakeRef.current?.release?.(); } catch {}
+    wakeRef.current = null;
+  }, []);
+
+  const enterFullscreen = useCallback(async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen?.();
+      }
+      // Bloquea orientación si es posible (mejor luminancia y UX)
+      // @ts-expect-error
+      await screen.orientation?.lock?.("portrait");
+    } catch {}
+  }, []);
 
   // ===== Helpers =====
   const clearTimers = useCallback(() => {
@@ -159,21 +214,13 @@ export default function PixelUser() {
 
   const startEffect = useCallback(
     (payload: EffectPayload, startAt?: number) => {
-      lastEffectRef.current = payload; // guarda para modo música
+      lastEffectRef.current = payload;
       const run = () => {
         switch (payload.effect) {
-          case "solid":
-            startSolid(payload);
-            break;
-          case "blink":
-            startBlink(payload);
-            break;
-          case "wave":
-            startWave(payload);
-            break;
-          case "gradient":
-            startGradient(payload);
-            break;
+          case "solid":    startSolid(payload); break;
+          case "blink":    startBlink(payload); break;
+          case "wave":     startWave(payload); break;
+          case "gradient": startGradient(payload); break;
         }
       };
       if (startAt && startAt > Date.now()) {
@@ -186,7 +233,7 @@ export default function PixelUser() {
     [startSolid, startBlink, startWave, startGradient]
   );
 
-  // Flash en cada CLAP
+  // ===== Flash visual por CLAP =====
   const flashRef = useRef<number | null>(null);
   const doFlash = useCallback(() => {
     if (flashRef.current) window.clearTimeout(flashRef.current);
@@ -203,6 +250,110 @@ export default function PixelUser() {
     }, 90);
   }, [bg, gradCSS, useGradient]);
 
+  // ====== L I N T E R N A (TORCH) ======
+  const torchTrackRef = useRef<MediaStreamTrack | null>(null);
+  const torchOnRef = useRef(false);
+
+  const setTorch = useCallback(async (on: boolean) => {
+    try {
+      if (on) {
+        if (!torchTrackRef.current) {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } as any }
+          });
+          const t = stream.getVideoTracks()[0];
+          // @ts-expect-error
+          await t.applyConstraints({ advanced: [{ torch: true }] });
+          torchTrackRef.current = t;
+        } else {
+          // @ts-expect-error
+          await torchTrackRef.current.applyConstraints({ advanced: [{ torch: true }] });
+        }
+        torchOnRef.current = true;
+      } else {
+        if (torchTrackRef.current) {
+          try {
+            // @ts-expect-error
+            await torchTrackRef.current.applyConstraints({ advanced: [{ torch: false }] });
+          } catch {}
+          torchTrackRef.current.stop();
+          torchTrackRef.current = null;
+        }
+        torchOnRef.current = false;
+      }
+    } catch (e) {
+      console.warn("Torch no soportado en este dispositivo/navegador:", e);
+      // fallback visual: pantalla blanca intensa
+      setUseGradient(false);
+      setBg(on ? "#ffffff" : "#000000");
+      torchOnRef.current = on;
+    }
+  }, [setBg]);
+
+  // ====== A U D I O  (WebAudio con precarga) ======
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const buffersRef = useRef<Map<number, AudioBuffer>>(new Map());
+  const audioReadyRef = useRef(false);
+  const [needsTap, setNeedsTap] = useState(true);
+
+  const ensureAudioCtx = useCallback(() => {
+    if (!audioCtxRef.current) {
+      const Ctx = (window.AudioContext || (window as any).webkitAudioContext);
+      audioCtxRef.current = new Ctx();
+    }
+    return audioCtxRef.current!;
+  }, []);
+
+  const preloadSounds = useCallback(async () => {
+    const ctx = ensureAudioCtx();
+    const entries = Object.entries(soundMap) as [string, string][];
+    await Promise.all(entries.map(async ([k, url]) => {
+      const res = await fetch(url);
+      const arr = await res.arrayBuffer();
+      const buf = await ctx.decodeAudioData(arr);
+      buffersRef.current.set(Number(k), buf);
+    }));
+  }, [ensureAudioCtx]);
+
+  // desbloqueo por primer toque
+  useEffect(() => {
+    const onTap = async () => {
+      try {
+        const ctx = ensureAudioCtx();
+        if (ctx.state !== "running") await ctx.resume();
+        if (buffersRef.current.size === 0) await preloadSounds();
+        audioReadyRef.current = true;
+        setNeedsTap(false);
+      } catch (e) {
+        console.warn("Audio unlock error:", e);
+      }
+    };
+    window.addEventListener("pointerdown", onTap, { once: true, passive: true });
+    return () => window.removeEventListener("pointerdown", onTap);
+  }, [ensureAudioCtx, preloadSounds]);
+
+  const playSound = useCallback(async (id: number) => {
+    const ctx = ensureAudioCtx();
+    if (ctx.state !== "running") {
+      // pedir toque
+      setNeedsTap(true);
+      try { await ctx.resume(); } catch {}
+      if (ctx.state !== "running") return; // aún bloqueado
+    }
+    if (buffersRef.current.size === 0) {
+      try { await preloadSounds(); } catch {}
+    }
+    const buf = buffersRef.current.get(id);
+    if (!buf) return;
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.85;
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+  }, [ensureAudioCtx, preloadSounds]);
+
   // ===== Conexión Realtime =====
   useEffect(() => {
     const id = (eventId || "").trim();
@@ -216,13 +367,29 @@ export default function PixelUser() {
     });
 
     ch.on("broadcast", { event: "cmd" }, (msg) => {
-      const { type, startAt, payload } = (msg.payload || {}) as {
-        type: "effect" | "stop";
-        startAt?: number;
-        payload?: EffectPayload;
-      };
-      if (type === "stop") stopVisuals();
-      if (type === "effect" && payload) startEffect(payload, startAt);
+      const { type, startAt, payload } = (msg.payload || {}) as any;
+
+      if (type === "stop") {
+        stopVisuals();
+        return;
+      }
+
+      if (type === "effect" && payload) {
+        startEffect(payload as EffectPayload, startAt);
+        return;
+      }
+
+      if (type === "flash") {
+        const desired = typeof payload?.on === "boolean" ? !!payload.on : !torchOnRef.current;
+        setTorch(desired);
+        return;
+      }
+
+      if (type === "sound") {
+        const idNum = Number(payload?.id) || 1;
+        playSound(idNum);
+        return;
+      }
     });
 
     ch.on("broadcast", { event: "mode" }, (msg) => {
@@ -230,7 +397,7 @@ export default function PixelUser() {
       musicModeRef.current = !!music;
     });
 
-    // Nuevo: usa la amplitud (norm) para mezclar ColorB->ColorA en modo música
+    // amplitud normalizada desde admin (sensor)
     ch.on("broadcast", { event: "sensor" }, (msg) => {
       const { norm, clap } = (msg.payload || {}) as { norm?: number; clap?: boolean };
       if (!musicModeRef.current) return;
@@ -239,8 +406,8 @@ export default function PixelUser() {
 
       if (typeof norm === "number") {
         const eff = lastEffectRef.current;
-        if (!eff) return; // si aún no se envió ningún efecto, no hay colores base
-        const t = clamp01(norm); // 0..1
+        if (!eff) return;
+        const t = clamp01(norm);
         const mixed = lerpColor(eff.colors[1], eff.colors[0], t); // B->A
         setUseGradient(false);
         setBg(mixed);
@@ -258,21 +425,18 @@ export default function PixelUser() {
       ch.unsubscribe();
       channelRef.current = null;
     };
-  }, [eventId, deviceKey, phase, doFlash, startEffect, stopVisuals]);
+  }, [eventId, deviceKey, phase, doFlash, startEffect, stopVisuals, setTorch, playSound]);
 
   // ===== Fullscreen / WakeLock si viene auto=1 =====
   useEffect(() => {
     if (!auto) return;
-    const tryFs = async () => {
-      try {
-        await document.documentElement.requestFullscreen?.();
-        if ("wakeLock" in navigator) {
-          await (navigator as any).wakeLock.request("screen");
-        }
-      } catch {}
-    };
-    tryFs();
-  }, [auto]);
+    (async () => {
+      await enterFullscreen();
+      await requestWakeLock();
+      // mensaje sutil para brillo
+      setNeedsTap((v) => v); // mantiene banner si audio bloqueado
+    })();
+  }, [auto, enterFullscreen, requestWakeLock]);
 
   // ===== Interacción local mínima (fallback) =====
   const handleTap = () => {
@@ -285,6 +449,8 @@ export default function PixelUser() {
     localStorage.removeItem("currentEventName");
     try { channelRef.current?.unsubscribe(); } catch {}
     stopVisuals();
+    setTorch(false);
+    releaseWakeLock();
     navigate("/");
   };
 
@@ -301,6 +467,19 @@ export default function PixelUser() {
         }}
       />
 
+      {/* Aviso para brillo y audio */}
+      {needsTap && (
+        <div
+          className="pointer-events-none fixed top-0 inset-x-0 text-center text-white text-sm"
+          style={{
+            background: "linear-gradient(180deg, rgba(0,0,0,0.6), rgba(0,0,0,0))",
+            padding: "10px 12px",
+          }}
+        >
+          Sube el brillo al máximo y toca la pantalla una vez para habilitar el audio 🔊
+        </div>
+      )}
+
       {/* Barra inferior con nombre del evento + salir */}
       <div
         className="pointer-events-auto fixed inset-x-0 bottom-0"
@@ -316,12 +495,20 @@ export default function PixelUser() {
               <p className="text-xs uppercase tracking-wide text-white/70">Evento</p>
               <p className="text-base font-semibold">{eventId || eventName || "—"}</p>
             </div>
-            <button
-              onClick={handleLeave}
-              className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/20 border border-white/10"
-            >
-              Salir del evento
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => { await enterFullscreen(); await requestWakeLock(); }}
+                className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/20 border border-white/10"
+              >
+                Pantalla completa
+              </button>
+              <button
+                onClick={handleLeave}
+                className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/20 border border-white/10"
+              >
+                Salir
+              </button>
+            </div>
           </div>
         </div>
       </div>
